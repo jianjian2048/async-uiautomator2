@@ -1,0 +1,38 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.coverage
+.coverage.*
+htmlcov/
+build/
+dist/
+wheels/
+*.egg-info
+pip-wheel-metadata/
+
+# Virtual environments
+.venv
+.venv/
+venv/
+env/
+
+# Tool caches
+.uv-cache/
+.tox/
+.nox/
+
+# Local runtime data
+.cache/
+.example/
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

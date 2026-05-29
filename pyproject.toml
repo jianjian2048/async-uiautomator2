@@ -1,0 +1,25 @@
+[project]
+name = "async-uiautomator2"
+version = "0.1.0"
+description = "Android UI 自动化的异步 Python 客户端"
+readme = "README.md"
+authors = [
+    { name = "jian jian", email = "jianjian2048@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "uiautomator2>=3.5.2",
+]
+
+[build-system]
+requires = ["uv_build>=0.9.10,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
