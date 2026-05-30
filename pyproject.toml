@@ -1,6 +1,6 @@
 [project]
 name = "async-uiautomator2"
-version = "0.1.0"
+version = "0.1.1"
 description = "Android UI 自动化的异步 Python 客户端"
 readme = "README.md"
 authors = [
