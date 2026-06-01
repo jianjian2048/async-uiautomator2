@@ -191,6 +191,69 @@ class AsyncUiObject:
         x, y = await self.center(offset=offset)
         return await self.session.click(x, y)
 
+    async def set_text(self, text: str | None, timeout: float | None = None) -> Any:
+        """设置元素文本，空文本会清空输入框。"""
+
+        await self.must_wait(timeout=timeout)
+        if not text:
+            return await self.session.server.jsonrpc_call(
+                "clearTextField", [self.selector], timeout=10
+            )
+        return await self.session.server.jsonrpc_call(
+            "setText", [self.selector, text], timeout=10
+        )
+
+    async def send_keys(self, text: str, timeout: float | None = None) -> Any:
+        """`set_text()` 的别名。"""
+
+        return await self.set_text(text, timeout=timeout)
+
+    async def clear_text(self, timeout: float | None = None) -> Any:
+        """清空元素文本。"""
+
+        return await self.set_text(None, timeout=timeout)
+
+    async def long_click(
+        self, duration: float = 0.5, timeout: float | None = None
+    ) -> Any:
+        """长按元素中心点。"""
+
+        await self.must_wait(timeout=timeout)
+        x, y = await self.center()
+        return await self.session.long_click(x, y, duration=duration)
+
+    async def swipe(
+        self, direction: str, steps: int = 10, timeout: float | None = None
+    ) -> Any:
+        """从元素中心向指定方向滑动。"""
+
+        if direction not in ("left", "right", "up", "down"):
+            raise ValueError("direction 必须是 left/right/up/down 之一")
+        await self.must_wait(timeout=timeout)
+        left, top, right, bottom = await self.bounds()
+        cx = left + (right - left) * 0.5
+        cy = top + (bottom - top) * 0.5
+        if direction == "up":
+            return await self.session.swipe(cx, cy, cx, top, steps=steps)
+        if direction == "down":
+            return await self.session.swipe(cx, cy, cx, bottom - 1, steps=steps)
+        if direction == "left":
+            return await self.session.swipe(cx, cy, left, cy, steps=steps)
+        return await self.session.swipe(cx, cy, right - 1, cy, steps=steps)
+
+    async def drag(
+        self,
+        x: int | float,
+        y: int | float,
+        duration: float = 0.5,
+        timeout: float | None = None,
+    ) -> Any:
+        """将元素中心拖拽到指定坐标。"""
+
+        await self.must_wait(timeout=timeout)
+        sx, sy = await self.center()
+        return await self.session.drag(sx, sy, x, y, duration=duration)
+
     def child(self, **kwargs: Any) -> "AsyncUiObject":
         """创建子元素选择器。"""
 

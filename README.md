@@ -81,8 +81,15 @@ xml = await d.dump_hierarchy()
 output = await d.shell("getprop ro.product.model")
 
 await d.click(100, 200)
+await d.long_click(100, 200, duration=0.5)
+await d.swipe(100, 800, 100, 200, duration=0.3)
+await d.drag(100, 800, 100, 200, duration=0.5)
+await d.send_keys("hello", clear=True)
+await d.clear_text()
 await d.push("local.txt", "/data/local/tmp/local.txt")
 await d.app_start("com.example")
+await d.app_stop("com.example")
+await d.app_clear("com.example")
 ```
 
 `dump_hierarchy()` 默认调用：
@@ -116,6 +123,12 @@ await obj.exists
 await obj.wait(timeout=10)
 await obj.wait(exists=False, timeout=10)
 await obj.click(timeout=10)
+await obj.long_click(duration=0.5)
+await obj.swipe("left", steps=10)
+await obj.drag(100, 200, duration=0.5)
+await obj.set_text("hello")
+await obj.send_keys("hello")
+await obj.clear_text()
 
 child = obj.child(text="设置")
 peer = obj.sibling(description="更多")

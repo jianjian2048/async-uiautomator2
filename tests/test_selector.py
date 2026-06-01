@@ -22,9 +22,24 @@ class FakeSession:
     def __init__(self) -> None:
         self.server = FakeServer()
         self.clicks = []
+        self.long_clicks = []
+        self.swipes = []
+        self.drags = []
 
     async def click(self, x, y):
         self.clicks.append((x, y))
+        return True
+
+    async def long_click(self, x, y, duration=0.5):
+        self.long_clicks.append((x, y, duration))
+        return True
+
+    async def swipe(self, fx, fy, tx, ty, duration=None, steps=None):
+        self.swipes.append((fx, fy, tx, ty, duration, steps))
+        return True
+
+    async def drag(self, sx, sy, ex, ey, duration=0.5):
+        self.drags.append((sx, sy, ex, ey, duration))
         return True
 
 
@@ -86,3 +101,37 @@ def test_child_and_sibling_build_selector_chain() -> None:
     assert child_data["childOrSiblingSelector"][0]["text"] == "设置"
     assert sibling_data["childOrSibling"] == ["sibling"]
     assert sibling_data["childOrSiblingSelector"][0]["description"] == "更多"
+
+
+def test_async_ui_object_text_and_gesture_helpers() -> None:
+    async def run() -> None:
+        session = FakeSession()
+        obj = AsyncUiObject(session, SelectorQuery(resource_id="input").to_selector())
+
+        assert await obj.set_text("hello", timeout=1) is None
+        assert await obj.send_keys("world", timeout=1) is None
+        assert await obj.clear_text(timeout=1) is None
+        assert await obj.long_click(duration=0.75, timeout=1) is True
+        assert await obj.swipe("left", steps=12, timeout=1) is True
+        assert await obj.drag(100, 120, duration=0.25, timeout=1) is True
+
+        methods = [call[0] for call in session.server.calls]
+        assert methods == [
+            "waitForExists",
+            "setText",
+            "waitForExists",
+            "setText",
+            "waitForExists",
+            "clearTextField",
+            "waitForExists",
+            "objInfo",
+            "waitForExists",
+            "objInfo",
+            "waitForExists",
+            "objInfo",
+        ]
+        assert session.long_clicks == [(20.0, 40.0, 0.75)]
+        assert session.swipes == [(20.0, 40.0, 10, 40.0, None, 12)]
+        assert session.drags == [(20.0, 40.0, 100, 120, 0.25)]
+
+    asyncio.run(run())

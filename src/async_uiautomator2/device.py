@@ -12,6 +12,8 @@ from async_uiautomator2.selector import AsyncUiObject, SelectorQuery
 from async_uiautomator2.server import AsyncBasicUiautomatorServer
 from async_uiautomator2.xpath import AsyncXPathSelector
 
+SCROLL_STEPS = 55
+
 
 class AsyncDevice:
     """面向调用方的最小异步设备 API。
@@ -38,6 +40,75 @@ class AsyncDevice:
 
         return await self.server.jsonrpc_call("click", [x, y], timeout=10)
 
+    async def long_click(
+        self, x: int | float, y: int | float, duration: float = 0.5
+    ) -> Any:
+        """长按屏幕坐标。"""
+
+        x, y = await self._pos_rel2abs(x, y)
+        return await self.server.jsonrpc_call(
+            "click", [x, y, int(duration * 1000)], timeout=10
+        )
+
+    async def swipe(
+        self,
+        fx: int | float,
+        fy: int | float,
+        tx: int | float,
+        ty: int | float,
+        duration: float | None = None,
+        steps: int | None = None,
+    ) -> Any:
+        """从一个坐标滑动到另一个坐标。"""
+
+        if duration is not None and steps is not None:
+            duration = None
+        if duration is not None:
+            steps = int(duration * 200)
+        if not steps:
+            steps = SCROLL_STEPS
+        fx, fy = await self._pos_rel2abs(fx, fy)
+        tx, ty = await self._pos_rel2abs(tx, ty)
+        return await self.server.jsonrpc_call(
+            "swipe", [fx, fy, tx, ty, max(2, steps)], timeout=10
+        )
+
+    async def drag(
+        self,
+        sx: int | float,
+        sy: int | float,
+        ex: int | float,
+        ey: int | float,
+        duration: float = 0.5,
+    ) -> Any:
+        """从一个坐标拖拽到另一个坐标。"""
+
+        sx, sy = await self._pos_rel2abs(sx, sy)
+        ex, ey = await self._pos_rel2abs(ex, ey)
+        return await self.server.jsonrpc_call(
+            "drag", [sx, sy, ex, ey, int(duration * 200)], timeout=10
+        )
+
+    async def clear_text(self) -> Any:
+        """清空当前聚焦输入框文本。"""
+
+        return await self.server.jsonrpc_call("clearInputText", [], timeout=10)
+
+    async def set_clipboard(self, text: str, label: str | None = None) -> Any:
+        """设置设备剪贴板文本。"""
+
+        return await self.server.jsonrpc_call(
+            "setClipboard", [label, text], timeout=10
+        )
+
+    async def send_keys(self, text: str, clear: bool = False) -> Any:
+        """向当前聚焦输入框输入文本。"""
+
+        if clear:
+            await self.clear_text()
+        await self.set_clipboard(text)
+        return await self.server.jsonrpc_call("pasteClipboard", [], timeout=10)
+
     async def shell(self, cmd: str | list[str], timeout: float = 60) -> str:
         """执行 adb shell 命令。"""
 
@@ -52,6 +123,36 @@ class AsyncDevice:
         """启动 Android 应用。"""
 
         return await self.adb_device.app_start(package_name)
+
+    async def app_stop(self, package_name: str) -> Any:
+        """停止 Android 应用。"""
+
+        app_stop = getattr(self.adb_device, "app_stop", None)
+        if app_stop is not None:
+            return await app_stop(package_name)
+        return await self.shell(["am", "force-stop", package_name])
+
+    async def app_clear(self, package_name: str) -> Any:
+        """停止并清理 Android 应用数据。"""
+
+        app_clear = getattr(self.adb_device, "app_clear", None)
+        if app_clear is not None:
+            return await app_clear(package_name)
+        return await self.shell(["pm", "clear", package_name])
+
+    async def window_size(self) -> tuple[int, int]:
+        """获取当前设备屏幕尺寸。"""
+
+        info = await self.info
+        width = info.get("displayWidth")
+        height = info.get("displayHeight")
+        if width is None or height is None:
+            display_size = info.get("displaySize") or {}
+            width = display_size.get("width")
+            height = display_size.get("height")
+        if width is None or height is None:
+            raise RuntimeError("deviceInfo 未返回屏幕尺寸")
+        return int(width), int(height)
 
     async def dump_hierarchy(
         self,
@@ -145,6 +246,21 @@ class AsyncDevice:
         """创建异步 XPath 选择器。"""
 
         return AsyncXPathSelector(self, xpath, source=source)
+
+    async def _pos_rel2abs(
+        self, x: int | float, y: int | float
+    ) -> tuple[int | float, int | float]:
+        """将小于 1 的相对坐标转换为绝对坐标。"""
+
+        if x < 0 or y < 0:
+            raise ValueError("坐标不能为负数")
+        if x < 1 or y < 1:
+            width, height = await self.window_size()
+            if x < 1:
+                x = int(width * x)
+            if y < 1:
+                y = int(height * y)
+        return x, y
 
     async def close(self) -> None:
         """关闭当前客户端持有的 `u2.jar` stream 连接。"""

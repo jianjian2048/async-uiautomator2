@@ -52,6 +52,12 @@ class AsyncAdbDevice(Protocol):
     async def app_start(self, package_name: str) -> Any:
         """启动 Android 应用。"""
 
+    async def app_stop(self, package_name: str) -> Any:
+        """停止 Android 应用。"""
+
+    async def app_clear(self, package_name: str) -> Any:
+        """清理 Android 应用数据。"""
+
 
 class AsyncSocketConnection:
     """将同步 socket 包装成异步连接。
@@ -172,6 +178,18 @@ class ThreadedAdbDevice:
 
         dev = await self._ensure_device()
         return await asyncio.to_thread(dev.app_start, package_name)
+
+    async def app_stop(self, package_name: str) -> Any:
+        """停止 Android 应用。"""
+
+        dev = await self._ensure_device()
+        return await asyncio.to_thread(dev.app_stop, package_name)
+
+    async def app_clear(self, package_name: str) -> Any:
+        """清理 Android 应用数据。"""
+
+        dev = await self._ensure_device()
+        return await asyncio.to_thread(dev.app_clear, package_name)
 
     async def _ensure_device(self) -> Any:
         """懒加载并缓存 `adbutils.AdbDevice`。"""

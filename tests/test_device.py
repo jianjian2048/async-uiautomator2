@@ -12,7 +12,7 @@ class FakeServer:
     async def jsonrpc_call(self, method, params=None, timeout=10):
         self.calls.append((method, params, timeout))
         if method == "deviceInfo":
-            return {"serial": "demo"}
+            return {"serial": "demo", "displayWidth": 200, "displayHeight": 100}
         if method == "dumpWindowHierarchy":
             return "<hierarchy />"
         return True
@@ -28,6 +28,8 @@ class FakeAdb:
         self.shell_calls = []
         self.push_calls = []
         self.started = []
+        self.stopped = []
+        self.cleared = []
 
     async def shell(self, cmd, timeout=60):
         self.shell_calls.append((cmd, timeout))
@@ -40,6 +42,14 @@ class FakeAdb:
         self.started.append(package_name)
         return "started"
 
+    async def app_stop(self, package_name):
+        self.stopped.append(package_name)
+        return "stopped"
+
+    async def app_clear(self, package_name):
+        self.cleared.append(package_name)
+        return "cleared"
+
 
 def test_async_device_delegates_public_api() -> None:
     async def run() -> None:
@@ -47,7 +57,11 @@ def test_async_device_delegates_public_api() -> None:
         server = FakeServer()
         device = AsyncDevice(adb, server)
 
-        assert await device.info == {"serial": "demo"}
+        assert await device.info == {
+            "serial": "demo",
+            "displayWidth": 200,
+            "displayHeight": 100,
+        }
         assert await device.click(1, 2) is True
         assert await device.dump_hierarchy() == "<hierarchy />"
         assert await device.shell("echo ok", timeout=3) == "ok"
@@ -62,6 +76,35 @@ def test_async_device_delegates_public_api() -> None:
         assert adb.shell_calls == [("echo ok", 3)]
         assert adb.push_calls == [("a.txt", "/data/local/tmp/a.txt", 0o600, False)]
         assert adb.started == ["com.example"]
+
+    asyncio.run(run())
+
+
+def test_async_device_common_input_gesture_and_app_helpers() -> None:
+    async def run() -> None:
+        adb = FakeAdb()
+        server = FakeServer()
+        device = AsyncDevice(adb, server)
+
+        assert await device.long_click(10, 20, duration=0.75) is True
+        assert await device.swipe(1, 2, 3, 4, duration=0.5) is True
+        assert await device.drag(5, 6, 7, 8, duration=0.25) is True
+        assert await device.clear_text() is True
+        assert await device.send_keys("hello", clear=True) is True
+        assert await device.app_stop("com.example") == "stopped"
+        assert await device.app_clear("com.example") == "cleared"
+
+        assert server.calls == [
+            ("click", [10, 20, 750], 10),
+            ("swipe", [1, 2, 3, 4, 100], 10),
+            ("drag", [5, 6, 7, 8, 50], 10),
+            ("clearInputText", [], 10),
+            ("clearInputText", [], 10),
+            ("setClipboard", [None, "hello"], 10),
+            ("pasteClipboard", [], 10),
+        ]
+        assert adb.stopped == ["com.example"]
+        assert adb.cleared == ["com.example"]
 
     asyncio.run(run())
 
