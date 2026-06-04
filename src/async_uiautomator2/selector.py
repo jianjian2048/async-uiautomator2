@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any
 
 from uiautomator2._selector import Selector
-from uiautomator2.exceptions import UiObjectNotFoundError
+from uiautomator2.exceptions import RPCUnknownError, UiObjectNotFoundError
 
 BoundsTuple = tuple[int | float, int | float, int | float, int | float]
 PointTuple = tuple[int | float, int | float]
+STALE_OBJECT_EXCEPTION = "StaleObjectException"
+STALE_OBJECT_RETRY_COUNT = 3
+STALE_OBJECT_RETRY_INTERVAL = 0.1
 
 FIELD_MAP = {
     "text": "text",
@@ -38,6 +42,10 @@ FIELD_MAP = {
     "index": "index",
     "instance": "instance",
 }
+
+
+def _is_stale_object_exception(exc: RPCUnknownError) -> bool:
+    return STALE_OBJECT_EXCEPTION in str(exc)
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,9 +120,19 @@ class AsyncUiObject:
     async def get_info(self, timeout: float = 10) -> dict[str, Any]:
         """获取元素信息。"""
 
-        return await self.session.server.jsonrpc_call(
-            "objInfo", [self.selector], timeout=timeout
-        )
+        for attempt in range(STALE_OBJECT_RETRY_COUNT):
+            try:
+                return await self.session.server.jsonrpc_call(
+                    "objInfo", [self.selector], timeout=timeout
+                )
+            except RPCUnknownError as exc:
+                if (
+                    not _is_stale_object_exception(exc)
+                    or attempt == STALE_OBJECT_RETRY_COUNT - 1
+                ):
+                    raise
+                await asyncio.sleep(STALE_OBJECT_RETRY_INTERVAL)
+        raise RuntimeError("unreachable")
 
     async def exists_now(self, timeout: float = 10) -> bool:
         """立即检查元素是否存在。"""

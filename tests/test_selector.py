@@ -1,6 +1,7 @@
 import asyncio
 
 import pytest
+from uiautomator2.exceptions import RPCUnknownError
 
 from async_uiautomator2.selector import AsyncUiObject, SelectorQuery
 
@@ -41,6 +42,33 @@ class FakeSession:
     async def drag(self, sx, sy, ex, ey, duration=0.5):
         self.drags.append((sx, sy, ex, ey, duration))
         return True
+
+
+class StaleOnceServer(FakeServer):
+    def __init__(self) -> None:
+        super().__init__()
+        self.stale_returned = False
+
+    async def jsonrpc_call(self, method, params=None, timeout=10):
+        self.calls.append((method, params, timeout))
+        if method == "objInfo" and not self.stale_returned:
+            self.stale_returned = True
+            raise RPCUnknownError(
+                "Unknown RPC error: -32001 androidx.test.uiautomator.StaleObjectException",
+                params,
+                "androidx.test.uiautomator.StaleObjectException",
+            )
+        if method == "objInfo":
+            return {"bounds": {"left": 10, "top": 20, "right": 30, "bottom": 60}}
+        if method in {"waitForExists", "waitUntilGone"}:
+            return True
+        return None
+
+
+class StaleOnceSession(FakeSession):
+    def __init__(self) -> None:
+        super().__init__()
+        self.server = StaleOnceServer()
 
 
 def test_selector_query_maps_snake_case_and_preserves_false() -> None:
@@ -84,6 +112,20 @@ def test_async_ui_object_info_exists_wait_and_click() -> None:
             "waitForExists",
             "objInfo",
         ]
+        assert session.clicks == [(20.0, 40.0)]
+
+    asyncio.run(run())
+
+
+def test_click_retries_when_obj_info_is_stale_once() -> None:
+    async def run() -> None:
+        session = StaleOnceSession()
+        obj = AsyncUiObject(session, SelectorQuery(text="Continue").to_selector())
+
+        assert await obj.click(timeout=1) is True
+
+        methods = [call[0] for call in session.server.calls]
+        assert methods == ["waitForExists", "objInfo", "objInfo"]
         assert session.clicks == [(20.0, 40.0)]
 
     asyncio.run(run())
