@@ -87,6 +87,9 @@ await d.drag(100, 800, 100, 200, duration=0.5)
 await d.send_keys("hello", clear=True)
 await d.clear_text()
 await d.push("local.txt", "/data/local/tmp/local.txt")
+bytes_pulled = await d.pull("/sdcard/report.txt", "artifacts/report.txt")
+await d.screenshot("artifacts/home.png")
+image = await d.screenshot()
 await d.app_start("com.example")
 await d.app_stop("com.example")
 await d.app_clear("com.example")
@@ -99,6 +102,10 @@ await d.dump_hierarchy(compressed=False, pretty=False, max_depth=50)
 ```
 
 `pretty=True` 会使用 `lxml` 格式化 XML。
+
+`pull()` 返回实际拉取的字节数；`screenshot()` 不传文件名时返回 Pillow 图像，
+传入文件名时保存图像并返回 `None`。多显示器设备可以传入 `display_id`，未保存时还可
+通过 `format="opencv"` 获取 OpenCV 格式图像。
 
 ## Typed Selector
 
@@ -122,7 +129,12 @@ await obj.info
 await obj.exists
 await obj.wait(timeout=10)
 await obj.wait(exists=False, timeout=10)
+await obj.get_text()
+await obj.info_list()
+count = await obj.count
 await obj.click(timeout=10)
+await obj.click_exists()
+await obj.click_gone(maxretry=3, interval=0.5)
 await obj.long_click(duration=0.5)
 await obj.swipe("left", steps=10)
 await obj.drag(100, 200, duration=0.5)

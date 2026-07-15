@@ -27,6 +27,9 @@ class FakeAdb:
     def __init__(self) -> None:
         self.shell_calls = []
         self.push_calls = []
+        self.pull_calls = []
+        self.screenshot_calls = []
+        self.screenshot_result = None
         self.started = []
         self.stopped = []
         self.cleared = []
@@ -37,6 +40,14 @@ class FakeAdb:
 
     async def push(self, src, dst, mode=0o644, check=False):
         self.push_calls.append((src, dst, mode, check))
+
+    async def pull(self, src, dst, exist_ok=False):
+        self.pull_calls.append((src, dst, exist_ok))
+        return 42
+
+    async def screenshot(self, display_id=None):
+        self.screenshot_calls.append(display_id)
+        return self.screenshot_result
 
     async def app_start(self, package_name):
         self.started.append(package_name)
@@ -105,6 +116,51 @@ def test_async_device_common_input_gesture_and_app_helpers() -> None:
         ]
         assert adb.stopped == ["com.example"]
         assert adb.cleared == ["com.example"]
+
+    asyncio.run(run())
+
+
+def test_async_device_pulls_files_and_captures_screenshots() -> None:
+    class FakeImage:
+        def __init__(self) -> None:
+            self.saved_as = []
+
+        def save(self, filename) -> None:
+            self.saved_as.append(filename)
+
+    async def run() -> None:
+        adb = FakeAdb()
+        image = FakeImage()
+        adb.screenshot_result = image
+        device = AsyncDevice(adb, FakeServer())
+
+        assert await device.pull("/sdcard/report.txt", "report.txt", exist_ok=True) == 42
+        assert adb.pull_calls == [("/sdcard/report.txt", "report.txt", True)]
+        assert await device.screenshot(display_id=2) is image
+        assert adb.screenshot_calls == [2]
+        assert await device.screenshot("home.png") is None
+        assert image.saved_as == ["home.png"]
+
+    asyncio.run(run())
+
+
+def test_async_device_converts_screenshot_when_not_saving(monkeypatch) -> None:
+    async def run() -> None:
+        adb = FakeAdb()
+        image = object()
+        converted = object()
+        adb.screenshot_result = image
+        device = AsyncDevice(adb, FakeServer())
+        convert_calls = []
+
+        def fake_image_convert(value, format):
+            convert_calls.append((value, format))
+            return converted
+
+        monkeypatch.setattr(device_module, "image_convert", fake_image_convert)
+
+        assert await device.screenshot(format="opencv") is converted
+        assert convert_calls == [(image, "opencv")]
 
     asyncio.run(run())
 

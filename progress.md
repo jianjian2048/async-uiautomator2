@@ -16,6 +16,17 @@
 
 ## 2026-05-30
 
+## 2026-07-16
+
+- 已新增 `AsyncDevice.pull()`、`AsyncDevice.screenshot()`，并在 `AsyncAdbDevice`/`ThreadedAdbDevice` 中实现对应线程化 ADB 调用。
+- 已新增控件 `get_text()`、`info_list()`、`click_exists()`、`click_gone()`，并更新 README 与 API 契约文档。
+- 验证结果：`uv run pytest -q` 为 37 passed；`uv run python -m compileall -q src/async_uiautomator2`、`uv build` 与 `git diff --check` 均成功。
+
+- 已检查现有 ADB backend、公开 `AsyncDevice` API、测试和 API 文档，确认截图与 pull 尚未实现。
+- 已与用户确认接口：`screenshot(filename=None, format="pillow", display_id=None)` 与 `pull(src, dst, exist_ok=False)`；对应设计规格已提交。
+- 用户要求采用 `planning-with-files-zh`；已读取并扩展工作区的 `task_plan.md`、`findings.md` 和 `progress.md`。
+- 恢复脚本路径在当前机器不存在，已记录该错误；未影响依据当前工作树与 Git 历史继续跟踪。
+
 - 根据反馈检查了 `uiautomator2` 的 jar 资源机制：当前版本通过 `with_package_resource("assets/u2.jar")` 查找包内资源，`assets/sync.sh` 中 jar 下载源为 `https://public.uiauto.devsleep.com/u2jar/0.2.2/u2.jar`。
 - 先添加 `tests/test_assets.py`，确认当前缺少 `async_uiautomator2.assets` resolver 时测试失败。
 - 新增 `async_uiautomator2.assets.ensure_u2_jar()`：显式路径优先，其次复制包资源到缓存，最后从 devsleep jar 源下载。

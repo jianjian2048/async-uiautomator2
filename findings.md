@@ -1,5 +1,20 @@
 # async-uiautomator2 发现记录
 
+## 2026-07-16 screenshot / pull
+
+- 当前 `AsyncDevice` 已提供 `push`，但 `AsyncAdbDevice`、`ThreadedAdbDevice` 和公开设备 API 均缺少 `pull` 与 `screenshot`。
+- 当前锁定依赖 `adbutils 2.12.0`：`sync.pull(src, dst, exist_ok=False)` 返回已拉取字节数；`screenshot(display_id=None, error_ok=True)` 返回 Pillow 图像。
+- `uiautomator2.Device.screenshot(filename=None, format="pillow", display_id=None)` 是兼容目标：传入 `filename` 时保存图像并返回 `None`，未传时返回指定格式的图像。
+- 规格已提交至 `docs/superpowers/specs/2026-07-16-screenshot-pull-design.md`（提交 `4b24e84`）。
+- 控件 API 审计显示，当前文档中承诺的控件方法均已存在；相较上游常用基础能力，补充了 `get_text()`、`info_list()`、`click_exists()` 与 `click_gone()`。上游 `parent()` 本身未实现，因此没有引入不完整的兼容接口。
+
+## 遇到的错误
+
+| 错误 | 尝试次数 | 解决方案 |
+| --- | --- | --- |
+| `python` 不能导入 `adbutils` | 1 | 使用项目环境的 `uv run python` 进行 API 检查。 |
+| planning skill 指定的 `~/.claude/.../session-catchup.py` 不存在 | 1 | 已读取项目内三份规划文件；后续使用工作区状态与 Git 历史恢复上下文。 |
+
 ## 文档要点
 
 - 第一版要覆盖 `async_connect()`、`AsyncDevice`、`AsyncUiObject`、`AsyncXPathSelector`。

@@ -49,6 +49,14 @@ class AsyncAdbDevice(Protocol):
     ) -> None:
         """推送文件到设备。"""
 
+    async def pull(
+        self, src: str, dst: str | Path, exist_ok: bool = False
+    ) -> int:
+        """从设备拉取文件或目录。"""
+
+    async def screenshot(self, display_id: int | None = None) -> Any:
+        """截取设备屏幕并返回 Pillow 图像。"""
+
     async def app_start(self, package_name: str) -> Any:
         """启动 Android 应用。"""
 
@@ -172,6 +180,20 @@ class ThreadedAdbDevice:
 
         dev = await self._ensure_device()
         await asyncio.to_thread(dev.sync.push, src, dst, mode=mode, check=check)
+
+    async def pull(
+        self, src: str, dst: str | Path, exist_ok: bool = False
+    ) -> int:
+        """从设备拉取文件或目录。"""
+
+        dev = await self._ensure_device()
+        return await asyncio.to_thread(dev.sync.pull, src, dst, exist_ok=exist_ok)
+
+    async def screenshot(self, display_id: int | None = None) -> Any:
+        """截取设备屏幕并返回 Pillow 图像。"""
+
+        dev = await self._ensure_device()
+        return await asyncio.to_thread(dev.screenshot, display_id=display_id)
 
     async def app_start(self, package_name: str) -> Any:
         """启动 Android 应用。"""

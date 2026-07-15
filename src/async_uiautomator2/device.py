@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from uiautomator2._selector import Selector
+from uiautomator2.utils import image_convert
 
 from async_uiautomator2.adb import AsyncAdbDevice, ThreadedAdbDevice
 from async_uiautomator2.selector import AsyncUiObject, SelectorQuery
@@ -118,6 +119,27 @@ class AsyncDevice:
         """推送文件到设备。"""
 
         await self.adb_device.push(src, dst, mode=mode)
+
+    async def pull(
+        self, src: str, dst: str | Path, exist_ok: bool = False
+    ) -> int:
+        """从设备拉取文件或目录。"""
+
+        return await self.adb_device.pull(src, dst, exist_ok=exist_ok)
+
+    async def screenshot(
+        self,
+        filename: str | Path | None = None,
+        format: str = "pillow",
+        display_id: int | None = None,
+    ) -> Any | None:
+        """截取设备屏幕。"""
+
+        image = await self.adb_device.screenshot(display_id=display_id)
+        if filename:
+            image.save(filename)
+            return None
+        return image_convert(image, format)
 
     async def app_start(self, package_name: str) -> Any:
         """启动 Android 应用。"""

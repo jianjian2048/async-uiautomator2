@@ -117,6 +117,12 @@ class AsyncUiObject:
 
         return self.exists_now()
 
+    @property
+    def count(self):
+        """获取匹配元素数量的协程。"""
+
+        return self.get_count()
+
     async def get_info(self, timeout: float = 10) -> dict[str, Any]:
         """获取元素信息。"""
 
@@ -133,6 +139,30 @@ class AsyncUiObject:
                     raise
                 await asyncio.sleep(STALE_OBJECT_RETRY_INTERVAL)
         raise RuntimeError("unreachable")
+
+    async def info_list(self, timeout: float = 10) -> list[dict[str, Any]]:
+        """获取所有匹配元素的信息。"""
+
+        return await self.session.server.jsonrpc_call(
+            "objInfoOfAllInstances", [self.selector], timeout=timeout
+        )
+
+    async def get_count(self, timeout: float = 10) -> int:
+        """获取匹配元素数量。"""
+
+        return int(
+            await self.session.server.jsonrpc_call(
+                "count", [self.selector], timeout=timeout
+            )
+        )
+
+    async def get_text(self, timeout: float | None = None) -> str | None:
+        """获取元素文本。"""
+
+        await self.must_wait(timeout=timeout)
+        return await self.session.server.jsonrpc_call(
+            "getText", [self.selector], timeout=10
+        )
 
     async def exists_now(self, timeout: float = 10) -> bool:
         """立即检查元素是否存在。"""
@@ -208,6 +238,26 @@ class AsyncUiObject:
         await self.must_wait(timeout=timeout)
         x, y = await self.center(offset=offset)
         return await self.session.click(x, y)
+
+    async def click_exists(self, timeout: float | None = 0) -> bool:
+        """元素存在时点击，并返回是否成功点击。"""
+
+        try:
+            await self.click(timeout=timeout)
+            return True
+        except UiObjectNotFoundError:
+            return False
+
+    async def click_gone(self, maxretry: int = 10, interval: float = 1.0) -> bool:
+        """重复点击元素，直到元素消失或达到重试上限。"""
+
+        await self.click_exists()
+        for _ in range(maxretry):
+            await asyncio.sleep(interval)
+            if not await self.exists:
+                return True
+            await self.click_exists()
+        return False
 
     async def set_text(self, text: str | None, timeout: float | None = None) -> Any:
         """设置元素文本，空文本会清空输入框。"""

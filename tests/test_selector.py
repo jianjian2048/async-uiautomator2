@@ -14,6 +14,12 @@ class FakeServer:
         self.calls.append((method, params, timeout))
         if method == "objInfo":
             return {"bounds": {"left": 10, "top": 20, "right": 30, "bottom": 60}}
+        if method == "objInfoOfAllInstances":
+            return [{"text": "hello"}]
+        if method == "count":
+            return 3
+        if method == "getText":
+            return "hello"
         if method in {"waitForExists", "waitUntilGone"}:
             return True
         return None
@@ -69,6 +75,30 @@ class StaleOnceSession(FakeSession):
     def __init__(self) -> None:
         super().__init__()
         self.server = StaleOnceServer()
+
+
+class GoneOnClickServer(FakeServer):
+    def __init__(self) -> None:
+        super().__init__()
+        self.visible = True
+
+    async def jsonrpc_call(self, method, params=None, timeout=10):
+        self.calls.append((method, params, timeout))
+        if method == "waitForExists":
+            return self.visible
+        if method == "objInfo":
+            return {"bounds": {"left": 10, "top": 20, "right": 30, "bottom": 60}}
+        return None
+
+
+class GoneOnClickSession(FakeSession):
+    def __init__(self) -> None:
+        super().__init__()
+        self.server = GoneOnClickServer()
+
+    async def click(self, x, y):
+        self.server.visible = False
+        return await super().click(x, y)
 
 
 def test_selector_query_maps_snake_case_and_preserves_false() -> None:
@@ -175,5 +205,35 @@ def test_async_ui_object_text_and_gesture_helpers() -> None:
         assert session.long_clicks == [(20.0, 40.0, 0.75)]
         assert session.swipes == [(20.0, 40.0, 10, 40.0, None, 12)]
         assert session.drags == [(20.0, 40.0, 100, 120, 0.25)]
+
+    asyncio.run(run())
+
+
+def test_async_ui_object_text_info_and_conditional_click_helpers() -> None:
+    async def run() -> None:
+        session = FakeSession()
+        obj = AsyncUiObject(session, SelectorQuery(resource_id="input").to_selector())
+
+        assert await obj.get_text(timeout=1) == "hello"
+        assert await obj.info_list() == [{"text": "hello"}]
+        assert await obj.count == 3
+        assert await obj.click_exists(timeout=1) is True
+
+        gone_session = GoneOnClickSession()
+        gone_obj = AsyncUiObject(
+            gone_session, SelectorQuery(resource_id="toast").to_selector()
+        )
+        assert await gone_obj.click_gone(maxretry=1, interval=0) is True
+
+        assert [call[0] for call in session.server.calls] == [
+            "waitForExists",
+            "getText",
+            "objInfoOfAllInstances",
+            "count",
+            "waitForExists",
+            "objInfo",
+        ]
+        assert session.clicks == [(20.0, 40.0)]
+        assert gone_session.clicks == [(20.0, 40.0)]
 
     asyncio.run(run())

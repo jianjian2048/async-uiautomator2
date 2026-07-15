@@ -121,6 +121,51 @@ async def push(self, src: str | Path, dst: str, mode: int = 0o644) -> None:
 
 - 第一阶段通过同步 `adbutils.sync.push` 的线程包装实现。
 
+### pull
+
+```python
+size = await d.pull("/sdcard/report.txt", "artifacts/report.txt")
+```
+
+签名：
+
+```python
+async def pull(
+    self, src: str, dst: str | Path, exist_ok: bool = False
+) -> int:
+    ...
+```
+
+行为：
+
+- 通过同步 `adbutils.sync.pull` 的线程包装实现。
+- 返回实际拉取的字节数；`exist_ok` 用于远程目录已存在时的处理。
+
+### screenshot
+
+```python
+await d.screenshot("artifacts/home.png")
+image = await d.screenshot()
+```
+
+签名：
+
+```python
+async def screenshot(
+    self,
+    filename: str | Path | None = None,
+    format: str = "pillow",
+    display_id: int | None = None,
+) -> Any | None:
+    ...
+```
+
+行为：
+
+- 通过同步 `adbutils.screenshot` 的线程包装获取 Pillow 图像。
+- 未传 `filename` 时返回 `format` 指定的图像格式；传入文件名时保存并返回 `None`。
+- `display_id` 用于指定多显示器中的目标屏幕。
+
 ### app_start
 
 ```python
@@ -272,6 +317,24 @@ await obj.click(timeout=10)
 2. 调用 `objInfo` 获取 bounds。
 3. 计算中心点。
 4. 调用 `d.click(x, y)`。
+
+### 其他控件辅助方法
+
+```python
+text = await obj.get_text()
+infos = await obj.info_list()
+count = await obj.count
+clicked = await obj.click_exists()
+gone = await obj.click_gone(maxretry=3, interval=0.5)
+```
+
+行为：
+
+- `get_text()` 等待元素存在后调用 JSON-RPC `getText`。
+- `info_list()` 调用 JSON-RPC `objInfoOfAllInstances`，返回全部匹配元素信息。
+- `count` 属性返回协程；await 后通过 JSON-RPC `count` 获取匹配元素数量。
+- `click_exists()` 在元素不存在时返回 `False`，而非抛出找不到元素异常。
+- `click_gone()` 会重复点击并轮询，直到元素消失或达到重试上限。
 
 ### child / sibling
 

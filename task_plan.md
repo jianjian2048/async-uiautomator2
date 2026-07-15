@@ -15,12 +15,17 @@
 | 5 | complete | 补充 README 和示例 |
 | 6 | complete | 运行 `uv run pytest -q` 与 `uv run python -m compileall -q src/async_uiautomator2` |
 | 7 | complete | 移除 `experiment/` jar fallback，改为包资源/缓存/devsleep 自动下载 resolver |
+| 8 | complete | 截图与 pull 的设计规格已确认、提交并获得用户审阅 |
+| 9 | complete | 已为截图、pull 和新增控件辅助方法编写并验证失败单元测试 |
+| 10 | complete | 已实现 backend、`AsyncDevice` API、控件辅助方法并更新文档 |
+| 11 | complete | 已执行目标测试、完整测试、编译与构建验证 |
 
 ## 验收命令
 
 ```shell
 uv run pytest -q
 uv run python -m compileall -q src/async_uiautomator2
+uv build
 ```
 
 ## 注意事项
