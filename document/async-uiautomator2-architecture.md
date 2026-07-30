@@ -20,7 +20,7 @@ AsyncAdbHTTPClient
 AsyncAdbDevice backend
   |
   v
-ADB transport -> u2.jar:9008
+ADB transport -> u2.jar:<port>
 ```
 
 核心原则：
@@ -73,7 +73,7 @@ class AsyncAdbDevice(Protocol):
 
 职责：
 
-- 每个请求通过 `create_connection(TCP, 9008)` 建立设备端 socket。
+- 每个请求通过 `create_connection(TCP, port)` 建立设备端 socket，默认端口为 `9008`。
 - 手写 HTTP/1.1 请求。
 - 读取并解析 HTTP 响应。
 - 实现 `GET /ping` 和 `POST /jsonrpc/0`。
@@ -95,7 +95,7 @@ class AsyncAdbHTTPClient:
     async def request(self, method: str, path: str, data: dict[str, Any] | None = None, timeout: float = 10) -> HTTPResponse: ...
 ```
 
-不建议第一阶段引入 `httpx`，因为当前 uiautomator2 v3.5+ 的连接模型不是本地 HTTP 端口，而是 ADB socket 直连设备端端口。
+不建议第一阶段引入 `httpx`，因为当前 uiautomator2 v3.7+ 的连接模型不是本地 HTTP 端口，而是 ADB socket 直连设备端端口。
 
 ### `server.py`
 
@@ -104,7 +104,7 @@ class AsyncAdbHTTPClient:
 职责：
 
 - 检查和推送 `u2.jar`。
-- 启动 `app_process`。
+- 使用 `app_process ... Main -p <port>` 启动服务。
 - 等待 `/ping` ready。
 - 停止当前客户端持有的 stream。
 - JSON-RPC 自动重启和重试一次。
@@ -116,16 +116,17 @@ class AsyncBasicUiautomatorServer:
     device: AsyncAdbDevice
     http: AsyncAdbHTTPClient
     _process: Any
-    _lock: asyncio.Lock
     _restart_lock: asyncio.Lock
     _generation: int
 ```
 
 并发规则：
 
-- `start_uiautomator()` 和 `stop_uiautomator()` 必须串行。
-- 多个 RPC 同时发现服务不可用时，只允许一个协程执行重启。
-- 使用 `_generation` 避免重复重启。
+- 同一事件循环中，server 实例按 `(device.serial, port)` 共享生命周期锁和 generation。
+- 相同设备端口的启动、停止和重启必须串行，不同设备或不同端口互不阻塞。
+- 多个 RPC 同时发现服务不可用时，generation 已变化的实例复用其他实例的恢复结果。
+- 同一个共享状态还持有独立的输入锁；它只串行 DOWN/MOVE/UP 原始触摸序列，
+  不占用生命周期锁。
 
 ### `device.py`
 
@@ -134,7 +135,7 @@ class AsyncBasicUiautomatorServer:
 职责：
 
 - 组合 `AsyncAdbDevice` 和 `AsyncBasicUiautomatorServer`。
-- 提供坐标点击、shell、push、app_start 等常用方法。
+- 提供坐标点击、线性/多点/贝塞尔手势、shell、push、app_start 等常用方法。
 - 提供 `select()` 和 `xpath()` 入口。
 - 提供 async context manager。
 
@@ -144,6 +145,30 @@ class AsyncBasicUiautomatorServer:
 - `select()` 使用显式 keyword-only 参数。
 - 不提供 `__call__(**kwargs)`。
 - `close()` 默认只停止当前客户端启动的 `u2.jar` stream，不应该杀掉用户未授权的外部状态。
+
+贝塞尔手势分为两条执行路径：
+
+- 滑动：Python 生成、取整并去重轨迹，然后通过单次 `swipePoints` RPC 下发。
+- 拖动：通过 `injectInputEvent` 拆分 DOWN、MOVE 和 UP；`finally` 负责异常或取消时
+  的触点释放。
+
+```mermaid
+sequenceDiagram
+    participant D as AsyncDevice
+    participant L as Shared input lock
+    participant J as u2.jar 0.4.0
+    D->>L: acquire(serial, port)
+    D->>J: ACTION_DOWN
+    loop 贝塞尔轨迹中间点与终点
+        D->>J: ACTION_MOVE
+    end
+    alt 正常完成
+        D->>J: ACTION_UP
+    else 异常或取消
+        D->>J: ACTION_UP in finally
+    end
+    D->>L: release
+```
 
 ### `selector.py`
 
@@ -174,7 +199,9 @@ class AsyncBasicUiautomatorServer:
 - 通过 `dumpWindowHierarchy` 获取 XML。
 - 复用 `uiautomator2.xpath` 的 `XPathSelector`、`PageSource`、`XMLElement`。
 - 在 Python 侧匹配元素。
-- 用 bounds 计算点击坐标。
+- 提供 bounds、rect、center 和 offset 几何能力，并用 bounds 计算点击坐标。
+- 提供父节点导航、长按、文本替换和元素区域截图。
+- 选择器级查询读取当前 XML；`AsyncXPathElement` 保存创建时的 XML 快照。
 
 适用场景：
 
@@ -222,6 +249,11 @@ class AsyncBasicUiautomatorServer:
 - JSON-RPC 错误映射。
 - server 启动、ready、关闭。
 - 并发 RPC 失败只触发一次重启。
+- 相同设备端口的多实例共享生命周期锁，不同端口可以并发启动。
+- 自定义端口被传入 HTTP 客户端和 `u2.jar` 启动命令。
+- hierarchy 的两参数兼容调用和可选 `root_in_active` 三参数调用。
+- 多点滑动的总时长换算、贝塞尔轨迹复现、坐标裁剪和连续重复点移除。
+- 贝塞尔拖动的 DOWN/MOVE/UP 顺序、共享输入锁以及异常/取消时的 UP 释放。
 - `ThreadedAdbProcess` 不创建阻塞事件循环退出的 asyncio task。
 - typed selector 字段转换。
 - `AsyncUiObject` 的 `exists/info/click/child/sibling`。

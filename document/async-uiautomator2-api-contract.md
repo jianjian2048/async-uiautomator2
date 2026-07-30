@@ -18,6 +18,7 @@ async with await async_connect("emulator-5554") as d:
 async def async_connect(
     serial: str | None = None,
     *,
+    port: int = 9008,
     device_factory: Callable[[str | None], AsyncAdbDevice] | None = None,
     jar_path: str | Path | None = None,
     setup_jar: bool = True,
@@ -28,6 +29,7 @@ async def async_connect(
 行为：
 
 - 默认使用线程包装的 `adbutils` backend。
+- `port` 是设备端 `u2.jar` HTTP 端口，范围为 `1-65535`。
 - 创建 server 并确保 `u2.jar` ready。
 - 返回 `AsyncDevice`。
 - 测试可以传入 `device_factory` 注入 fake backend。
@@ -63,6 +65,85 @@ async def click(self, x: int | float, y: int | float) -> Any:
 - 调用 JSON-RPC `click`。
 - 不做坐标合法性裁剪。
 
+### 多点与二次贝塞尔手势
+
+```python
+await d.swipe_points(
+    [(100, 800), (140, 500), (100, 200)],
+    duration=0.5,
+)
+await d.swipe_bezier(
+    (100, 800),
+    (100, 200),
+    duration=0.8,
+    trajectory_steps=30,
+    seed=7,
+)
+await d.drag_bezier(
+    (100, 800),
+    (100, 200),
+    hold_duration=0.5,
+    duration=1.0,
+    trajectory_steps=30,
+    seed=7,
+)
+```
+
+签名：
+
+```python
+async def swipe_points(
+    self,
+    points: Sequence[tuple[int | float, int | float]],
+    duration: float = 0.5,
+) -> Any:
+    ...
+
+async def swipe_bezier(
+    self,
+    start: tuple[int | float, int | float],
+    end: tuple[int | float, int | float],
+    *,
+    control: tuple[int | float, int | float] | None = None,
+    duration: float = 0.5,
+    trajectory_steps: int = 30,
+    seed: int | None = None,
+) -> Any:
+    ...
+
+async def drag_bezier(
+    self,
+    start: tuple[int | float, int | float],
+    end: tuple[int | float, int | float],
+    *,
+    control: tuple[int | float, int | float] | None = None,
+    hold_duration: float = 0.5,
+    duration: float = 1.0,
+    trajectory_steps: int = 30,
+    seed: int | None = None,
+) -> Any:
+    ...
+```
+
+行为：
+
+- `swipe_points()` 通过单次 JSON-RPC `swipePoints(flat_points, segment_steps)`
+  下发完整轨迹。
+- `swipe_points()` 和 `swipe_bezier()` 的 `duration` 表示整条轨迹目标时长；
+  `segment_steps` 按去重后的轨迹段数计算。
+- `swipe_bezier()` 和 `drag_bezier()` 生成包含起点、终点的二次贝塞尔轨迹；
+  `trajectory_steps` 必须大于等于 `2`。
+- 未传 `control` 时在起终点连线的垂线方向生成随机控制点；`seed` 用于复现。
+  显式传入 `control` 时忽略 `seed`。
+- 小于 `1` 的坐标按屏幕宽高转换为相对坐标；所有点会裁剪到屏幕范围、取整并移除
+  连续重复坐标。最终少于两个不同坐标时抛出 `ValueError`。
+- `drag_bezier()` 依次调用
+  `injectInputEvent(ACTION_DOWN/ACTION_MOVE/ACTION_UP, x, y, 0)`。
+  `hold_duration` 表示 DOWN 后的停留时长, `duration` 表示移动阶段目标时长。
+- 同一事件循环内, 相同 `(device.serial, port)` 的原始输入序列使用共享输入锁串行；
+  不同设备或不同端口互不阻塞。
+- DOWN 成功后, 即使移动阶段抛出异常或任务被取消, 也会在释放输入锁前尝试发送 UP。
+
 ### dump hierarchy
 
 ```python
@@ -77,13 +158,18 @@ async def dump_hierarchy(
     compressed: bool = False,
     pretty: bool = False,
     max_depth: int = 50,
+    root_in_active: bool | None = None,
 ) -> str:
     ...
 ```
 
 行为：
 
-- 调用 JSON-RPC `dumpWindowHierarchy(compressed, max_depth)`。
+- `root_in_active=None` 时调用
+  `dumpWindowHierarchy(compressed, max_depth)`，保持旧 jar 兼容。
+- `root_in_active` 为布尔值时调用
+  `dumpWindowHierarchy(compressed, max_depth, root_in_active)`。
+- `True` 只导出活动窗口根节点，`False` 显式导出全部可访问窗口根节点。
 - `pretty=True` 时可以使用 `lxml` 格式化 XML。
 
 ### shell
@@ -380,8 +466,14 @@ await selector.get()
 await selector.wait(timeout=10)
 await selector.wait_gone(timeout=10)
 await selector.get_text()
+await selector.bounds()
+await selector.rect()
+await selector.center()
 await selector.click()
 await selector.click_exists()
+await selector.long_click(duration=0.75)
+await selector.set_text("hello")
+await selector.screenshot()
 selector.child("...")
 ```
 
@@ -390,6 +482,37 @@ selector.child("...")
 - 每次未传入固定 source 时，调用 `dump_hierarchy()` 获取当前 XML。
 - `get()` 超时后抛出 `XPathElementNotFoundError`。
 - `click()` 点击第一个匹配元素中心点。
+- `bounds()` 返回 `(left, top, right, bottom)`。
+- `rect()` 返回 `(left, top, width, height)`。
+- 选择器级几何方法读取当前页面，避免复用过期元素坐标。
+
+### AsyncXPathElement
+
+必须支持：
+
+```python
+element.text
+element.attrib
+element.info
+element.bounds
+element.rect
+element.center()
+element.offset(px=0.5, py=0.5)
+element.get_xpath(strip_index=False)
+element.parent()
+element.parent("//android.widget.FrameLayout")
+await element.click()
+await element.long_click(duration=0.75)
+await element.screenshot()
+```
+
+行为：
+
+- `bounds` 返回 `(left, top, right, bottom)`。
+- `rect` 返回 `(left, top, width, height)`。
+- `parent(xpath=None)` 返回父元素；传入 XPath 时向上查找匹配祖先，未找到返回 `None`。
+- 元素几何信息来自创建该元素时的 XML 快照，不自动刷新。
+- `screenshot()` 获取当前屏幕截图后按元素 `bounds` 裁剪。
 
 ## 资源释放
 
@@ -420,7 +543,7 @@ finally:
 第一版依赖：
 
 - Python 3.12+
-- `uiautomator2>=3.5.0`
+- `uiautomator2>=3.7,<4`
 - `adbutils`
 - `pytest`
 

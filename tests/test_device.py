@@ -1,5 +1,7 @@
 import asyncio
 
+import pytest
+
 import async_uiautomator2.device as device_module
 from async_uiautomator2.device import AsyncDevice, async_connect
 
@@ -8,6 +10,7 @@ class FakeServer:
     def __init__(self) -> None:
         self.calls = []
         self.closed = False
+        self.input_lock = asyncio.Lock()
 
     async def jsonrpc_call(self, method, params=None, timeout=10):
         self.calls.append((method, params, timeout))
@@ -75,14 +78,24 @@ def test_async_device_delegates_public_api() -> None:
         }
         assert await device.click(1, 2) is True
         assert await device.dump_hierarchy() == "<hierarchy />"
+        assert (
+            await device.dump_hierarchy(root_in_active=True)
+            == "<hierarchy />"
+        )
+        assert (
+            await device.dump_hierarchy(root_in_active=False)
+            == "<hierarchy />"
+        )
         assert await device.shell("echo ok", timeout=3) == "ok"
         await device.push("a.txt", "/data/local/tmp/a.txt", mode=0o600)
         assert await device.app_start("com.example") == "started"
 
-        assert server.calls[:3] == [
+        assert server.calls[:5] == [
             ("deviceInfo", [], 10),
             ("click", [1, 2], 10),
             ("dumpWindowHierarchy", [False, 50], 10),
+            ("dumpWindowHierarchy", [False, 50, True], 10),
+            ("dumpWindowHierarchy", [False, 50, False], 10),
         ]
         assert adb.shell_calls == [("echo ok", 3)]
         assert adb.push_calls == [("a.txt", "/data/local/tmp/a.txt", 0o600, False)]
@@ -116,6 +129,216 @@ def test_async_device_common_input_gesture_and_app_helpers() -> None:
         ]
         assert adb.stopped == ["com.example"]
         assert adb.cleared == ["com.example"]
+
+    asyncio.run(run())
+
+
+def test_generate_bezier_trajectory_is_reproducible() -> None:
+    points = device_module._generate_bezier_trajectory(
+        (0, 0),
+        (100, 0),
+        4,
+        seed=7,
+    )
+
+    assert points == device_module._generate_bezier_trajectory(
+        (0, 0),
+        (100, 0),
+        4,
+        seed=7,
+    )
+    assert len(points) == 5
+    assert points[0] == (0, 0)
+    assert points[-1] == (100, 0)
+    assert any(y != 0 for _, y in points[1:-1])
+
+    with pytest.raises(ValueError, match="steps"):
+        device_module._generate_bezier_trajectory((0, 0), (100, 0), 1)
+
+
+def test_async_device_swipe_points_and_bezier_use_total_duration() -> None:
+    async def run() -> None:
+        server = FakeServer()
+        device = AsyncDevice(FakeAdb(), server)
+
+        assert (
+            await device.swipe_points(
+                [(0.5, 0.5), (100, 50), (300, 200)],
+                duration=0.3,
+            )
+            is True
+        )
+        assert (
+            await device.swipe_bezier(
+                (10, 20),
+                (110, 20),
+                control=(60, 70),
+                duration=0.4,
+                trajectory_steps=4,
+            )
+            is True
+        )
+
+        assert server.calls == [
+            ("deviceInfo", [], 10),
+            (
+                "swipePoints",
+                [[100, 50, 199, 99], 60],
+                10,
+            ),
+            ("deviceInfo", [], 10),
+            (
+                "swipePoints",
+                [[10, 20, 35, 39, 60, 45, 85, 39, 110, 20], 20],
+                10,
+            ),
+        ]
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    ("method", "kwargs", "message"),
+    [
+        ("swipe_points", {"points": [(0, 0)], "duration": 0.5}, "2"),
+        (
+            "swipe_points",
+            {"points": [(0, 0), (1, 1)], "duration": 0},
+            "duration",
+        ),
+        (
+            "swipe_bezier",
+            {
+                "start": (0, 0),
+                "end": (10, 10),
+                "trajectory_steps": 1,
+            },
+            "trajectory_steps",
+        ),
+    ],
+)
+def test_async_device_rejects_invalid_bezier_gestures(
+    method, kwargs, message
+) -> None:
+    async def run() -> None:
+        device = AsyncDevice(FakeAdb(), FakeServer())
+
+        with pytest.raises(ValueError, match=message):
+            await getattr(device, method)(**kwargs)
+
+    asyncio.run(run())
+
+
+def test_async_device_drag_bezier_sends_down_moves_and_up(monkeypatch) -> None:
+    async def run() -> None:
+        server = FakeServer()
+        device = AsyncDevice(FakeAdb(), server)
+        sleeps = []
+
+        async def fake_sleep(delay: float) -> None:
+            sleeps.append(delay)
+
+        monkeypatch.setattr(device_module.asyncio, "sleep", fake_sleep)
+
+        assert (
+            await device.drag_bezier(
+                (10, 10),
+                (90, 10),
+                control=(50, 50),
+                hold_duration=0.3,
+                duration=0.4,
+                trajectory_steps=2,
+            )
+            is True
+        )
+
+        assert server.calls == [
+            ("deviceInfo", [], 10),
+            ("injectInputEvent", [0, 10, 10, 0], 10),
+            ("injectInputEvent", [2, 50, 30, 0], 10),
+            ("injectInputEvent", [2, 90, 10, 0], 10),
+            ("injectInputEvent", [1, 90, 10, 0], 10),
+        ]
+        assert sleeps == [0.3, 0.2, 0.2]
+        assert server.input_lock.locked() is False
+
+    asyncio.run(run())
+
+
+def test_async_device_drag_bezier_releases_touch_after_error() -> None:
+    class FailingServer(FakeServer):
+        async def jsonrpc_call(self, method, params=None, timeout=10):
+            self.calls.append((method, params, timeout))
+            if method == "deviceInfo":
+                return {"displayWidth": 200, "displayHeight": 100}
+            if method == "injectInputEvent" and params[0] == 2:
+                raise RuntimeError("move failed")
+            return True
+
+    async def run() -> None:
+        server = FailingServer()
+        device = AsyncDevice(FakeAdb(), server)
+
+        with pytest.raises(RuntimeError, match="move failed"):
+            await device.drag_bezier(
+                (10, 10),
+                (90, 10),
+                control=(50, 50),
+                hold_duration=0,
+                duration=0.01,
+                trajectory_steps=2,
+            )
+
+        assert server.calls[-1] == (
+            "injectInputEvent",
+            [1, 10, 10, 0],
+            10,
+        )
+        assert server.input_lock.locked() is False
+
+    asyncio.run(run())
+
+
+def test_async_device_drag_bezier_releases_touch_when_cancelled() -> None:
+    class BlockingServer(FakeServer):
+        def __init__(self) -> None:
+            super().__init__()
+            self.move_started = asyncio.Event()
+
+        async def jsonrpc_call(self, method, params=None, timeout=10):
+            self.calls.append((method, params, timeout))
+            if method == "deviceInfo":
+                return {"displayWidth": 200, "displayHeight": 100}
+            if method == "injectInputEvent" and params[0] == 2:
+                self.move_started.set()
+                await asyncio.Event().wait()
+            return True
+
+    async def run() -> None:
+        server = BlockingServer()
+        device = AsyncDevice(FakeAdb(), server)
+        task = asyncio.create_task(
+            device.drag_bezier(
+                (10, 10),
+                (90, 10),
+                control=(50, 50),
+                hold_duration=0,
+                duration=0.01,
+                trajectory_steps=2,
+            )
+        )
+
+        await asyncio.wait_for(server.move_started.wait(), timeout=1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert server.calls[-1] == (
+            "injectInputEvent",
+            [1, 10, 10, 0],
+            10,
+        )
+        assert server.input_lock.locked() is False
 
     asyncio.run(run())
 
@@ -179,10 +402,12 @@ def test_async_device_context_manager_closes_server() -> None:
 def test_async_connect_uses_injected_device_factory(monkeypatch) -> None:
     async def run() -> None:
         started = False
+        server_kwargs = {}
 
         class FakeBasicServer(FakeServer):
             def __init__(self, *args, **kwargs) -> None:
                 super().__init__()
+                server_kwargs.update(kwargs)
 
             async def start_uiautomator(self) -> None:
                 nonlocal started
@@ -190,9 +415,14 @@ def test_async_connect_uses_injected_device_factory(monkeypatch) -> None:
 
         monkeypatch.setattr(device_module, "AsyncBasicUiautomatorServer", FakeBasicServer)
 
-        device = await async_connect("demo", device_factory=lambda serial: FakeAdb())
+        device = await async_connect(
+            "demo",
+            port=9010,
+            device_factory=lambda serial: FakeAdb(),
+        )
 
         assert isinstance(device, AsyncDevice)
         assert started is True
+        assert server_kwargs["port"] == 9010
 
     asyncio.run(run())

@@ -14,8 +14,8 @@
 - **不阻塞事件循环**：第一阶段通过 `asyncio.to_thread()` 包装同步 `adbutils` 调用，避免把
   ADB shell、push、socket I/O 直接跑在事件循环主路径上。参考 Python 官方文档：
   [`asyncio.to_thread`](https://docs.python.org/3/library/asyncio-task.html#asyncio.to_thread)。
-- **ADB socket 直连 u2.jar**：每次 HTTP 请求通过 ADB socket 连接设备端 `u2.jar:9008`，
-  手写最小 HTTP/1.1 请求，不依赖本地 `adb forward` 端口。
+- **ADB socket 直连 u2.jar**：每次 HTTP 请求通过 ADB socket 连接设备端 `u2.jar`，
+  默认端口为 `9008`，也可按连接配置自定义端口；不依赖本地 `adb forward`。
 - **JSON-RPC 封装**：提供 `deviceInfo`、`click`、`dumpWindowHierarchy`、`objInfo`、
   `waitForExists` 等常用 JSON-RPC 调用，并把常见错误映射到 `uiautomator2.exceptions`。
 - **u2.jar 生命周期管理**：启动、ready 检查、停止和异常后的自动重启集中在 server 层；
@@ -37,7 +37,7 @@ uv add async-uiautomator2
 依赖：
 
 - Python 3.12+
-- `uiautomator2>=3.5.2`
+- `uiautomator2>=3.7,<4`
 - `adbutils`，由 `uiautomator2` 间接提供
 
 使用前请确保设备已连接并授权：
@@ -63,6 +63,15 @@ async def main():
 asyncio.run(main())
 ```
 
+同一设备需要运行不同的 `u2.jar` 实例时，可以指定设备端端口：
+
+```python
+async with await async_connect("emulator-5554", port=9010) as d:
+    print(await d.info)
+```
+
+端口范围是 `1-65535`，默认值为 `9008`。
+
 不使用 `async with` 时，需要显式关闭当前客户端持有的 `u2.jar` stream：
 
 ```python
@@ -83,7 +92,23 @@ output = await d.shell("getprop ro.product.model")
 await d.click(100, 200)
 await d.long_click(100, 200, duration=0.5)
 await d.swipe(100, 800, 100, 200, duration=0.3)
+await d.swipe_points([(100, 800), (140, 500), (100, 200)], duration=0.5)
+await d.swipe_bezier(
+    (100, 800),
+    (100, 200),
+    duration=0.8,
+    trajectory_steps=30,
+    seed=7,
+)
 await d.drag(100, 800, 100, 200, duration=0.5)
+await d.drag_bezier(
+    (100, 800),
+    (100, 200),
+    hold_duration=0.5,
+    duration=1.0,
+    trajectory_steps=30,
+    seed=7,
+)
 await d.send_keys("hello", clear=True)
 await d.clear_text()
 await d.push("local.txt", "/data/local/tmp/local.txt")
@@ -98,14 +123,30 @@ await d.app_clear("com.example")
 `dump_hierarchy()` 默认调用：
 
 ```python
-await d.dump_hierarchy(compressed=False, pretty=False, max_depth=50)
+await d.dump_hierarchy(
+    compressed=False,
+    pretty=False,
+    max_depth=50,
+    root_in_active=None,
+)
 ```
 
-`pretty=True` 会使用 `lxml` 格式化 XML。
+`pretty=True` 会使用 `lxml` 格式化 XML。`root_in_active=True` 只导出当前活动窗口根节点，
+`False` 显式导出全部可访问窗口根节点；默认 `None` 保持两参数 JSON-RPC 调用，以兼容旧 jar。
 
 `pull()` 返回实际拉取的字节数；`screenshot()` 不传文件名时返回 Pillow 图像，
 传入文件名时保存图像并返回 `None`。多显示器设备可以传入 `display_id`，未保存时还可
 通过 `format="opencv"` 获取 OpenCV 格式图像。
+
+`swipe_points()` 和 `swipe_bezier()` 的 `duration` 都表示整条轨迹的目标时长。
+贝塞尔手势会先把小于 `1` 的坐标按屏幕宽高转换为相对坐标, 然后裁剪到屏幕范围、
+取整并移除连续重复点。自动控制点位于起终点连线的垂线方向, 传入 `seed` 可复现轨迹；
+也可以传入 `control=(x, y)` 明确指定控制点, 此时 `seed` 不参与计算。
+
+`drag_bezier()` 使用 `u2.jar 0.4.0` 的独立 DOWN/MOVE/UP 输入事件。
+`hold_duration` 是按下后的停留时长, `duration` 是移动阶段的目标时长。相同事件循环内,
+相同 `(device.serial, port)` 的贝塞尔拖动会串行执行；发生异常或任务取消时会在释放
+输入锁前补发 UP, 避免设备残留按下状态。
 
 ## Typed Selector
 
@@ -193,10 +234,23 @@ await selector.get()
 await selector.wait(timeout=10)
 await selector.wait_gone(timeout=10)
 await selector.get_text()
+await selector.bounds()       # (left, top, right, bottom)
+await selector.rect()         # (left, top, width, height)
+await selector.center()       # (center_x, center_y)
 await selector.click()
 await selector.click_exists()
+await selector.long_click(duration=0.75)
+await selector.set_text("hello")
+image = await selector.screenshot()
 selector.child("//android.widget.TextView")
 ```
+
+`await selector.get()` 返回 `AsyncXPathElement`。元素对象还可以读取 `text`、`attrib`、
+`info`、`bounds` 和 `rect`，调用 `center()`、`offset()`、`get_xpath()`、
+`parent()`、`click()`、`long_click()` 和 `screenshot()`。
+
+选择器级几何方法会查询当前页面。元素对象保存的是获得该元素时的 XML 快照；如果页面已经变化，
+请重新调用 `selector.get()` 或选择器级几何方法，避免使用过期坐标。
 
 支持 `uiautomator2.xpath` 的常用简写：
 
@@ -214,10 +268,12 @@ selector.child("//android.widget.TextView")
 默认不依赖 `experiment/` 目录，也不把 `u2.jar` 二进制文件打进 wheel。启动时按顺序解析：
 
 1. `async_connect(..., jar_path="...")` 显式传入的路径。
-2. 已安装包中的 `assets/u2.jar` 资源，例如 `uiautomator2` 自带资源。
-3. 本机缓存目录中的 `u2-<version>.jar`。
-4. 从 `uiautomator2/assets/sync.sh` 使用的 jar 源下载到缓存：
-   `https://public.uiauto.devsleep.com/u2jar/0.2.2/u2.jar`。
+2. 本机缓存目录中的 `u2-0.4.0.jar`。
+3. 已安装包中的 `assets/u2.jar` 资源，但其 `assets/version.json` 必须声明版本 `0.4.0`。
+4. 从官方 GitHub Release 下载到缓存：
+   `https://github.com/openatx/android-uiautomator-server-jar/releases/download/0.4.0/u2.jar`。
+
+旧的 `u2-0.2.2.jar` 缓存不会被复用或自动删除。
 
 可用环境变量覆盖缓存目录：
 
@@ -257,7 +313,8 @@ async def shutdown():
 ## 并发语义
 
 - 多设备之间可以并发，例如 `await asyncio.gather(run("device-a"), run("device-b"))`。
-- 同一设备上的服务启动、停止、重启由锁保护。
+- 同一事件循环中，相同 `(设备 serial, 端口)` 的服务启动、停止、重启由共享锁保护。
+- 不同设备或不同端口的服务生命周期互不阻塞。
 - 同一设备的 UI 操作仍应按界面状态顺序执行；并发 watcher 适合低频弹窗检测，不适合同时乱点。
 - shell、push 等阻塞 ADB 调用已隔离到线程；第一阶段不保证取消后设备端命令立即停止。
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import tempfile
@@ -10,8 +11,11 @@ from importlib.resources import as_file, files
 from pathlib import Path
 from typing import Callable, Iterable
 
-U2_JAR_VERSION = "0.2.2"
-U2_JAR_URL_TEMPLATE = "https://public.uiauto.devsleep.com/u2jar/{version}/u2.jar"
+U2_JAR_VERSION = "0.4.0"
+U2_JAR_URL_TEMPLATE = (
+    "https://github.com/openatx/android-uiautomator-server-jar/"
+    "releases/download/{version}/u2.jar"
+)
 
 Downloader = Callable[[str, Path], None]
 
@@ -65,7 +69,7 @@ def ensure_u2_jar(
     if cached_jar.exists():
         return cached_jar
 
-    if _copy_package_resource(cached_jar, package_names):
+    if _copy_package_resource(cached_jar, package_names, version):
         return cached_jar
 
     download = downloader or _download_file
@@ -76,17 +80,32 @@ def ensure_u2_jar(
     return cached_jar
 
 
-def _copy_package_resource(target: Path, package_names: Iterable[str]) -> bool:
-    """从已安装包的资源中复制 `u2.jar` 到缓存。"""
+def _copy_package_resource(
+    target: Path,
+    package_names: Iterable[str],
+    version: str,
+) -> bool:
+    """从版本匹配的已安装包资源中复制 `u2.jar` 到缓存。"""
 
     for package_name in package_names:
         try:
-            anchor = files(package_name) / "assets" / "u2.jar"
+            assets = files(package_name) / "assets"
+            version_info = json.loads(
+                (assets / "version.json").read_text(encoding="utf-8")
+            )
+            if version_info.get("u2.jar") != version:
+                continue
+            anchor = assets / "u2.jar"
             with as_file(anchor) as source:
                 if source.exists():
                     shutil.copy2(source, target)
                     return True
-        except (FileNotFoundError, ModuleNotFoundError, AttributeError):
+        except (
+            FileNotFoundError,
+            ModuleNotFoundError,
+            AttributeError,
+            json.JSONDecodeError,
+        ):
             continue
     return False
 

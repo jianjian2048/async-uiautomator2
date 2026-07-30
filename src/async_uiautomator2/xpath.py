@@ -11,6 +11,7 @@ from uiautomator2.xpath import PageSource, XMLElement, XPathSelector
 
 PointTuple = tuple[int, int]
 BoundsTuple = tuple[int, int, int, int]
+RectTuple = tuple[int, int, int, int]
 
 
 class AsyncXPathElement:
@@ -49,21 +50,52 @@ class AsyncXPathElement:
 
         return self._element.bounds
 
+    @property
+    def rect(self) -> RectTuple:
+        """元素矩形，格式为 `(left, top, width, height)`。"""
+
+        return self._element.rect
+
     def center(self) -> PointTuple:
         """计算元素中心点。"""
 
         return self._element.center()
+
+    def offset(self, px: float = 0.0, py: float = 0.0) -> PointTuple:
+        """按元素宽高比例计算内部坐标。"""
+
+        return self._element.offset(px, py)
 
     def get_xpath(self, strip_index: bool = False) -> str:
         """获取元素在 XML 树中的完整 XPath。"""
 
         return self._element.get_xpath(strip_index=strip_index)
 
+    def parent(self, xpath: str | None = None) -> "AsyncXPathElement | None":
+        """获取父元素，或向上查找第一个匹配 XPath 的祖先元素。"""
+
+        parent = self._element.parent(xpath)
+        if parent is None:
+            return None
+        return AsyncXPathElement(self.session, parent)
+
     async def click(self) -> Any:
         """点击元素中心点。"""
 
         x, y = self.center()
         return await self.session.click(x, y)
+
+    async def long_click(self, duration: float = 0.5) -> Any:
+        """长按元素中心点。"""
+
+        x, y = self.center()
+        return await self.session.long_click(x, y, duration=duration)
+
+    async def screenshot(self) -> Any:
+        """截取元素在当前屏幕截图中的区域。"""
+
+        image = await self.session.screenshot()
+        return image.crop(self.bounds)
 
 
 class AsyncXPathSelector:
@@ -156,6 +188,21 @@ class AsyncXPathSelector:
 
         return (await self.get(timeout=timeout)).text
 
+    async def bounds(self, timeout: float | None = None) -> BoundsTuple:
+        """获取第一个匹配元素的四边坐标。"""
+
+        return (await self.get(timeout=timeout)).bounds
+
+    async def rect(self, timeout: float | None = None) -> RectTuple:
+        """获取第一个匹配元素的左上角和宽高。"""
+
+        return (await self.get(timeout=timeout)).rect
+
+    async def center(self, timeout: float | None = None) -> PointTuple:
+        """获取第一个匹配元素的中心点。"""
+
+        return (await self.get(timeout=timeout)).center()
+
     async def click(self, timeout: float | None = None) -> Any:
         """点击第一个匹配元素。"""
 
@@ -169,6 +216,26 @@ class AsyncXPathSelector:
             return True
         except XPathElementNotFoundError:
             return False
+
+    async def long_click(
+        self, duration: float = 0.5, timeout: float | None = None
+    ) -> Any:
+        """长按第一个匹配元素。"""
+
+        return await (await self.get(timeout=timeout)).long_click(duration=duration)
+
+    async def set_text(self, text: str, timeout: float | None = None) -> None:
+        """聚焦第一个匹配元素并替换其文本。"""
+
+        element = await self.get(timeout=timeout)
+        await element.click()
+        await self.session.clear_text()
+        await self.session.send_keys(text)
+
+    async def screenshot(self, timeout: float | None = None) -> Any:
+        """截取第一个匹配元素的屏幕区域。"""
+
+        return await (await self.get(timeout=timeout)).screenshot()
 
     def child(self, xpath: str) -> "AsyncXPathSelector":
         """追加子级 XPath。"""

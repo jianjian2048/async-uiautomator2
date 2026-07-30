@@ -1,6 +1,6 @@
 [project]
 name = "async-uiautomator2"
-version = "0.1.4"
+version = "0.1.5"
 description = "Android UI 自动化的异步 Python 客户端"
 readme = "README.md"
 authors = [
@@ -8,7 +8,7 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
-    "uiautomator2>=3.5.2",
+    "uiautomator2>=3.7,<4",
 ]
 
 [build-system]

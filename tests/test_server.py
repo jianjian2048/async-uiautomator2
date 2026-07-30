@@ -21,7 +21,8 @@ class FakeProcess:
 
 
 class FakeDevice:
-    def __init__(self, shell_output: str = "") -> None:
+    def __init__(self, shell_output: str = "", serial: str = "demo") -> None:
+        self.serial = serial
         self.shell_output = shell_output
         self.pushes = []
         self.streams = []
@@ -97,17 +98,145 @@ def test_start_launches_process_when_not_alive(tmp_path) -> None:
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("port", [1, 65535])
+def test_server_accepts_valid_port_boundaries(port) -> None:
+    server = AsyncBasicUiautomatorServer(
+        FakeDevice(), port=port, setup_jar=False
+    )
+
+    assert server.port == port
+
+
+@pytest.mark.parametrize("port", [0, 65536])
+def test_server_rejects_invalid_port_boundaries(port) -> None:
+    with pytest.raises(ValueError, match="1-65535"):
+        AsyncBasicUiautomatorServer(FakeDevice(), port=port, setup_jar=False)
+
+
+def test_launch_command_includes_configured_port() -> None:
+    async def run() -> None:
+        dev = FakeDevice()
+        server = AsyncBasicUiautomatorServer(
+            dev, port=9010, setup_jar=False
+        )
+
+        await server.launch_uiautomator()
+
+        assert dev.streams[0][0] == (
+            "CLASSPATH=/data/local/tmp/u2.jar app_process / "
+            "com.wetest.uia2.Main -p 9010"
+        )
+
+    asyncio.run(run())
+
+
+def test_same_device_and_port_share_lifecycle_lock() -> None:
+    async def run() -> None:
+        state = {"alive": False, "launches": 0}
+
+        class SharedServer(AsyncBasicUiautomatorServer):
+            async def _check_alive(self) -> bool:
+                return state["alive"]
+
+            async def launch_uiautomator(self):
+                state["launches"] += 1
+                await asyncio.sleep(0)
+                state["alive"] = True
+                return FakeProcess()
+
+            async def _wait_ready(self, launch_timeout: float = 30) -> None:
+                pass
+
+        dev = FakeDevice(serial="shared")
+        first = SharedServer(dev, port=9010, setup_jar=False)
+        second = SharedServer(dev, port=9010, setup_jar=False)
+
+        await asyncio.gather(
+            first.start_uiautomator(),
+            second.start_uiautomator(),
+        )
+
+        assert state["launches"] == 1
+
+    asyncio.run(run())
+
+
+def test_different_ports_use_independent_lifecycle_locks() -> None:
+    async def run() -> None:
+        entered = 0
+        both_entered = asyncio.Event()
+        release = asyncio.Event()
+
+        class BlockingServer(AsyncBasicUiautomatorServer):
+            async def _check_alive(self) -> bool:
+                return False
+
+            async def launch_uiautomator(self):
+                nonlocal entered
+                entered += 1
+                if entered == 2:
+                    both_entered.set()
+                await release.wait()
+                return FakeProcess()
+
+            async def _wait_ready(self, launch_timeout: float = 30) -> None:
+                pass
+
+        dev = FakeDevice(serial="shared")
+        first = BlockingServer(dev, port=9010, setup_jar=False)
+        second = BlockingServer(dev, port=9011, setup_jar=False)
+        tasks = [
+            asyncio.create_task(first.start_uiautomator()),
+            asyncio.create_task(second.start_uiautomator()),
+        ]
+
+        await asyncio.wait_for(both_entered.wait(), timeout=1)
+        release.set()
+        await asyncio.gather(*tasks)
+
+        assert entered == 2
+
+    asyncio.run(run())
+
+
+def test_input_locks_are_shared_by_device_and_port() -> None:
+    async def run() -> None:
+        device = FakeDevice(serial="shared")
+        first = AsyncBasicUiautomatorServer(
+            device, port=9010, setup_jar=False
+        )
+        second = AsyncBasicUiautomatorServer(
+            device, port=9010, setup_jar=False
+        )
+        other_port = AsyncBasicUiautomatorServer(
+            device, port=9011, setup_jar=False
+        )
+        other_device = AsyncBasicUiautomatorServer(
+            FakeDevice(serial="other"), port=9010, setup_jar=False
+        )
+
+        assert first.input_lock is second.input_lock
+        assert first.input_lock is not other_port.input_lock
+        assert first.input_lock is not other_device.input_lock
+        assert first.input_lock is not first._get_lifecycle_state().lock
+
+    asyncio.run(run())
+
+
 def test_stop_kills_current_process_without_global_cleanup() -> None:
     async def run() -> None:
         dev = FakeDevice()
         server = AsyncBasicUiautomatorServer(dev, setup_jar=False)
         process = FakeProcess()
         server._process = process
+        lifecycle = server._get_lifecycle_state()
+        lifecycle.generation = 3
 
         await server.stop_uiautomator(wait=False)
 
         assert process.killed is True
         assert server._process is None
+        assert lifecycle.generation == 3
 
     asyncio.run(run())
 
@@ -124,10 +253,11 @@ def test_concurrent_jsonrpc_failures_trigger_one_restart() -> None:
                     raise HTTPError("down")
                 return {"ok": True}
 
-        async def restart() -> None:
+        async def restart(expected_generation=None) -> None:
             nonlocal restarts
             restarts += 1
             server._generation += 1
+            server._get_lifecycle_state().generation += 1
 
         server.http = FakeHTTP()
         server._force_restart_uiautomator = restart
@@ -140,6 +270,43 @@ def test_concurrent_jsonrpc_failures_trigger_one_restart() -> None:
 
         assert results == [{"ok": True}, {"ok": True}, {"ok": True}]
         assert restarts == 1
+
+    asyncio.run(run())
+
+
+def test_concurrent_instances_trigger_one_restart() -> None:
+    async def run() -> None:
+        state = {"alive": False, "launches": 0}
+
+        class FakeHTTP:
+            async def jsonrpc(self, method, params, timeout=10):
+                if not state["alive"]:
+                    raise HTTPError("down")
+                return {"ok": True}
+
+        class SharedServer(AsyncBasicUiautomatorServer):
+            async def launch_uiautomator(self):
+                state["launches"] += 1
+                await asyncio.sleep(0)
+                state["alive"] = True
+                return FakeProcess()
+
+            async def _wait_ready(self, launch_timeout: float = 30) -> None:
+                pass
+
+        dev = FakeDevice(serial="shared")
+        first = SharedServer(dev, port=9010, setup_jar=False)
+        second = SharedServer(dev, port=9010, setup_jar=False)
+        first.http = FakeHTTP()
+        second.http = FakeHTTP()
+
+        results = await asyncio.gather(
+            first.jsonrpc_call("deviceInfo"),
+            second.jsonrpc_call("deviceInfo"),
+        )
+
+        assert results == [{"ok": True}, {"ok": True}]
+        assert state["launches"] == 1
 
     asyncio.run(run())
 
